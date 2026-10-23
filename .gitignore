@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+backend/venv/
+backend/.venv/
+
+# Virtual environments
+*.env
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+frontend/node_modules/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+frontend/dist/
+frontend/build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.coverage.*
+
+# Type checking
+.mypy_cache/
+*.pyc
+
+# Database (if used later)
+*.db
+*.sqlite
+*.sqlite3
+
+# Private/generated test data
+test_data/
+data/
+*.tmp
+*.temp

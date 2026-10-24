@@ -13,6 +13,71 @@
 
 ---
 
+### Day 2 (2026-10-24)
+
+**Backend safety & error-message hardening (no behavior change)**
+- **Ollama error wrapper** (`backend/app/ollama.py`): `OllamaError` now carries `user_message` separate from internal `message`; all raise sites supply actionable user-facing text without exposing stack traces or internal details
+- **Actionable user messages** for every Ollama failure mode:
+  - Model not found → `"AI model 'gemma3:1b' not found. Please run: ollama pull gemma3:1b"`
+  - Connection refused → `"Cannot connect to the local AI service. Please ensure Ollama is running (run 'ollama serve' in a terminal)."`
+  - Timeout → `"AI request timed out after 60 seconds. The model may be loading or overloaded. Please try again."`
+  - Invalid JSON → `"AI service returned an invalid response format. Please try again."`
+  - Invalid suggestion schema → `"AI service returned an incomplete suggestion. Please try again."`
+  - Unexpected errors / max retries → generic actionable fallback
+- **Frontend** (`backend/app/main.py`): surfaces `e.user_message` instead of internal `e.message`
+- **Path-escape safeguard** in `scanner.py`: `relative_to()` wrapped in `try/except ValueError`; escaped paths recorded as `FileStatus.ERROR` with message "File path escaped scan directory"
+- **New backend tests** (all passing):
+  - `test_ollama.py`: invalid chars in filename (`<>`), Windows backslash traversal (`..\`), colon in folder, `user_message` field behavior
+  - `test_analyze.py`: connection error message, timeout message, model-not-found message
+  - `test_scanner.py`: symlink outside root (skipped on Windows), mocked `rglob` escape detection
+
+**Frontend results-review controls**
+- **Copy buttons** for "Proposed Filename" and "Destination Folder" using `navigator.clipboard.writeText()`
+- **Transient feedback**: success (✓ green, 2s), failure (✕ red, 3s), auto-clears
+- **Visual distinction**: proposed values styled in monospace with subtle background/border vs. original filename in header
+- **No new dependencies**; graceful clipboard failure handling
+
+**Confidence display & prompt clarification**
+- **Pipeline verified**: Ollama returns `uncertainty` (0.0–1.0) → Pydantic validates `ge=0.0, le=1.0` → frontend computes `confidence = (1 - uncertainty) * 100`
+- **Prompt improved** (`ollama.py`): explicit guidance for evidence-based uncertainty with concrete examples
+  - Shopping list → uncertainty ~0.1–0.2
+  - Ambiguous note → ~0.6–0.8
+  - Contradictory/sparse → ~0.8–1.0
+  - Factors: clarity, ambiguity, evidence strength
+- **Fixed stray `)`** in confidence label (`App.jsx:284`) → "Low confidence 5%" (was "Low confidence 5%)")
+- **Approximate-estimate disclaimer** added:
+  - Label: "(approximate model estimate)"
+  - Tooltip on progress bar: "Approximate model self-assessment, not a calibrated probability"
+- **New test**: `test_uncertainty_to_confidence_calculation` confirms 0.90→10% and 0.10→90%
+
+**Verification Results (local, Day 2)**
+
+| Check | Result |
+|-------|--------|
+| Frontend lint (`npm run lint` / oxlint) | **passed** (0 errors) |
+| Frontend production build (`npm run build` / vite) | **passed** (228 kB JS, 9.4 kB CSS gzipped) |
+| Backend pytest (`python -m pytest tests/` -v) | **41 passed, 2 skipped** |
+| Backend test breakdown | `test_analyze.py`: 11 tests; `test_ollama.py`: 13 tests (incl. new); `test_scanner.py`: 19 tests (incl. new) |
+| Skipped tests | `test_skip_symlink` (Windows), `test_symlink_outside_root_handled` (Windows) — symlinks not supported on this platform |
+
+**Changed files (Day 2 only)**
+
+| File | Type | Summary |
+|------|------|---------|
+| `backend/app/ollama.py` | Modified | Error wrapper `user_message`; all error messages user-facing; prompt with uncertainty guidance |
+| `backend/app/main.py` | Modified | Use `e.user_message` for frontend error display |
+| `backend/app/scanner.py` | Modified | `relative_to` ValueError catch for path-escape safety |
+| `backend/app/models.py` | Unchanged | Path-safety validators already present |
+| `backend/tests/test_ollama.py` | Modified | +4 new tests (invalid chars, backslash traversal, colon, uncertainty↔confidence) |
+| `backend/tests/test_analyze.py` | Modified | +3 new tests (actionable Ollama error messages) |
+| `backend/tests/test_scanner.py` | Modified | +2 new tests (path-escape detection) |
+| `frontend/src/App.jsx` | Modified | Copy-to-clipboard handler, feedback state, copy buttons, confidence label fix, disclaimer label |
+| `frontend/src/App.css` | Modified | Copy button styles, proposed filename/folder styling, uncertainty bar + fill, disclaimer note, dark mode |
+
+**No schema changes, no new dependencies, no automatic file operations, no folder picker.**
+
+---
+
 ## Daily Progress
 
 ### Day 1 (2026-10-23)

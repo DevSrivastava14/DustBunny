@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import './App.css'
 
 function App() {
@@ -12,7 +12,32 @@ function App() {
   const [analysisResult, setAnalysisResult] = useState(null)
   const [analysisError, setAnalysisError] = useState(null)
 
+  const [copyFeedback, setCopyFeedback] = useState({})
+
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+  const copyToClipboard = useCallback(async (text, key) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopyFeedback(prev => ({ ...prev, [key]: { status: 'success', timestamp: Date.now() } }))
+      setTimeout(() => {
+        setCopyFeedback(prev => {
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      }, 2000)
+    } catch {
+      setCopyFeedback(prev => ({ ...prev, [key]: { status: 'error', timestamp: Date.now() } }))
+      setTimeout(() => {
+        setCopyFeedback(prev => {
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      }, 3000)
+    }
+  }, [])
 
   useEffect(() => {
     const fetchBackendInfo = async () => {
@@ -198,21 +223,68 @@ function App() {
                         </div>
                         <div className="suggestion-field">
                           <span className="field-label">Proposed Filename:</span>
-                          <span className="field-value">{result.suggestion.suggested_filename}</span>
+                          <div className="field-value-with-copy">
+                            <span className="field-value proposed-filename">{result.suggestion.suggested_filename}</span>
+                            <button
+                              type="button"
+                              className="copy-btn"
+                              onClick={() => copyToClipboard(result.suggestion.suggested_filename, `filename-${index}`)}
+                              aria-label="Copy proposed filename"
+                              title="Copy proposed filename"
+                            >
+                              {copyFeedback[`filename-${index}`]?.status === 'success' ? (
+                                <span className="copy-icon success" aria-hidden="true">✓</span>
+                              ) : copyFeedback[`filename-${index}`]?.status === 'error' ? (
+                                <span className="copy-icon error" aria-hidden="true">✕</span>
+                              ) : (
+                                <span className="copy-icon" aria-hidden="true">⎘</span>
+                              )}
+                            </button>
+                          </div>
                         </div>
                         <div className="suggestion-field">
                           <span className="field-label">Destination Folder:</span>
-                          <span className="field-value">{result.suggestion.suggested_folder}</span>
+                          <div className="field-value-with-copy">
+                            <span className="field-value proposed-folder">{result.suggestion.suggested_folder}</span>
+                            <button
+                              type="button"
+                              className="copy-btn"
+                              onClick={() => copyToClipboard(result.suggestion.suggested_folder, `folder-${index}`)}
+                              aria-label="Copy destination folder"
+                              title="Copy destination folder"
+                            >
+                              {copyFeedback[`folder-${index}`]?.status === 'success' ? (
+                                <span className="copy-icon success" aria-hidden="true">✓</span>
+                              ) : copyFeedback[`folder-${index}`]?.status === 'error' ? (
+                                <span className="copy-icon error" aria-hidden="true">✕</span>
+                              ) : (
+                                <span className="copy-icon" aria-hidden="true">⎘</span>
+                              )}
+                            </button>
+                          </div>
                         </div>
                         <div className="suggestion-field full-width">
                           <span className="field-label">Explanation:</span>
                           <span className="field-value">{result.suggestion.explanation}</span>
                         </div>
-                        <div className="suggestion-field">
-                          <span className="field-label">Uncertainty:</span>
-                          <span className="field-value uncertainty">
-                            {(result.suggestion.uncertainty * 100).toFixed(0)}%
-                          </span>
+                        <div className="suggestion-field uncertainty-field">
+                          <span className="field-label">Confidence:</span>
+                          <div className="uncertainty-display">
+                            <div className="uncertainty-bar" title="Approximate model self-assessment, not a calibrated probability">
+                              <div
+                                className="uncertainty-fill"
+                                style={{
+                                  width: `${(1 - result.suggestion.uncertainty) * 100}%`,
+                                  backgroundColor: (1 - result.suggestion.uncertainty) * 100 >= 75 ? '#2e7d32' : (1 - result.suggestion.uncertainty) * 100 >= 50 ? '#f57c00' : '#c62828'
+                                }}
+                              ></div>
+                            </div>
+                            <span className="field-value uncertainty-label">
+                              {((1 - result.suggestion.uncertainty) * 100 >= 75 ? 'High' : (1 - result.suggestion.uncertainty) * 100 >= 50 ? 'Medium' : 'Low')} confidence
+                              {((1 - result.suggestion.uncertainty) * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          <span className="uncertainty-note">(approximate model estimate)</span>
                         </div>
                       </div>
                       <p className="ai-disclaimer">All fields above are AI-generated suggestions. DustBunny never moves, renames, or deletes files.</p>

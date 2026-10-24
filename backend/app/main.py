@@ -65,10 +65,10 @@ async def analyze_folder(request: AnalyzeRequest):
                 results.append(FileAnalysisResult(
                     filename=scanned["filename"],
                     status=FileStatus.ERROR,
-                    error_message=f"AI classification failed: {e.message}",
+                    error_message=e.user_message,
                 ))
                 error_count += 1
-            except Exception as e:
+            except Exception:
                 results.append(FileAnalysisResult(
                     filename=scanned["filename"],
                     status=FileStatus.ERROR,

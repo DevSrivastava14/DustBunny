@@ -26,6 +26,47 @@ class TestValidateFolderPath:
         assert "not a directory" in exc.value.message
 
 
+class TestScanFolderPathTraversal:
+    def test_symlink_outside_root_handled(self, tmp_path):
+        target_dir = tmp_path / "outside"
+        target_dir.mkdir()
+        (target_dir / "secret.txt").write_text("secret")
+        
+        scan_dir = tmp_path / "scan"
+        scan_dir.mkdir()
+        try:
+            link = scan_dir / "link.txt"
+            link.symlink_to(target_dir / "secret.txt")
+            results = scan_folder(str(scan_dir))
+            assert len(results) == 0
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported on this platform")
+
+    def test_relative_path_escape_handled(self, tmp_path, monkeypatch):
+        scan_dir = tmp_path / "scan"
+        scan_dir.mkdir()
+        (scan_dir / "normal.txt").write_text("content")
+        
+        original_rglob = Path.rglob
+        
+        def mock_rglob(self, pattern):
+            for item in original_rglob(self, pattern):
+                yield item
+            escape_file = tmp_path / "escape.txt"
+            escape_file.write_text("escaped")
+            yield escape_file
+        
+        monkeypatch.setattr(Path, "rglob", mock_rglob)
+        
+        results = scan_folder(str(scan_dir))
+        filenames = {r["filename"] for r in results}
+        assert "normal.txt" in filenames
+        escaped = [r for r in results if r["filename"] == "escape.txt"]
+        assert len(escaped) == 1
+        assert escaped[0]["status"] == FileStatus.ERROR
+        assert "escaped" in escaped[0]["error_message"].lower()
+
+
 class TestScanFolder:
     def test_scan_empty_directory(self, tmp_path):
         results = scan_folder(str(tmp_path))

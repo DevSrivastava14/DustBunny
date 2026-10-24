@@ -112,7 +112,16 @@ def scan_folder(folder_path: str) -> list[dict]:
         if file_path.is_symlink():
             continue
         
-        relative_path = file_path.relative_to(root_path)
+        try:
+            relative_path = file_path.relative_to(root_path)
+        except ValueError:
+            results.append({
+                "filename": file_path.name,
+                "status": FileStatus.ERROR,
+                "error_message": "File path escaped scan directory",
+                "text": None,
+            })
+            continue
         
         if not is_supported_file(file_path):
             results.append({

@@ -88,7 +88,7 @@ class TestAnalyzeEndpoint:
         
         with patch("app.main.classify_text", new_callable=AsyncMock) as mock_classify:
             from app.ollama import OllamaError
-            mock_classify.side_effect = OllamaError("Model not available", status_code=503)
+            mock_classify.side_effect = OllamaError("Model not available", status_code=503, user_message="AI service temporarily unavailable")
             response = client.post("/analyze", json={"folder_path": str(tmp_path)})
         
         assert response.status_code == 200
@@ -97,7 +97,59 @@ class TestAnalyzeEndpoint:
         assert data["processed_files"] == 0
         assert data["error_files"] == 1
         assert data["results"][0]["status"] == "error"
-        assert "AI classification failed" in data["results"][0]["error_message"]
+        assert "AI service temporarily unavailable" in data["results"][0]["error_message"]
+
+    def test_analyze_ollama_connection_error_message(self, tmp_path):
+        (tmp_path / "doc.txt").write_text("Content")
+        
+        with patch("app.main.classify_text", new_callable=AsyncMock) as mock_classify:
+            from app.ollama import OllamaError
+            mock_classify.side_effect = OllamaError(
+                "Cannot connect to Ollama at http://localhost:11434",
+                user_message="Cannot connect to the local AI service. Please ensure Ollama is running (run 'ollama serve' in a terminal)."
+            )
+            response = client.post("/analyze", json={"folder_path": str(tmp_path)})
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error_files"] == 1
+        assert "Cannot connect to the local AI service" in data["results"][0]["error_message"]
+        assert "ollama serve" in data["results"][0]["error_message"]
+
+    def test_analyze_ollama_timeout_error_message(self, tmp_path):
+        (tmp_path / "doc.txt").write_text("Content")
+        
+        with patch("app.main.classify_text", new_callable=AsyncMock) as mock_classify:
+            from app.ollama import OllamaError
+            mock_classify.side_effect = OllamaError(
+                "Ollama request timed out after 60s",
+                user_message="AI request timed out after 60 seconds. The model may be loading or overloaded. Please try again."
+            )
+            response = client.post("/analyze", json={"folder_path": str(tmp_path)})
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error_files"] == 1
+        assert "timed out" in data["results"][0]["error_message"].lower()
+        assert "try again" in data["results"][0]["error_message"].lower()
+
+    def test_analyze_ollama_model_not_found_message(self, tmp_path):
+        (tmp_path / "doc.txt").write_text("Content")
+        
+        with patch("app.main.classify_text", new_callable=AsyncMock) as mock_classify:
+            from app.ollama import OllamaError
+            mock_classify.side_effect = OllamaError(
+                "Ollama model 'gemma3:1b' not found",
+                status_code=404,
+                user_message="AI model 'gemma3:1b' not found. Please run: ollama pull gemma3:1b"
+            )
+            response = client.post("/analyze", json={"folder_path": str(tmp_path)})
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error_files"] == 1
+        assert "gemma3:1b" in data["results"][0]["error_message"]
+        assert "ollama pull" in data["results"][0]["error_message"]
     
     def test_analyze_pdf_file(self, tmp_path):
         import fitz

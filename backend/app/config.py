@@ -16,10 +16,11 @@ class Settings(BaseSettings):
     backend_reload: bool = True
     
     ollama_host: str = "http://localhost:11434"
-    ollama_model: str = "gemma3:1b"
+    ollama_model: str = "qwen3.5:2b"
     
     max_file_size_mb: int = 10
     max_extracted_text_chars: int = 50000
+    max_analysis_text_chars: int = 8000
     scan_timeout_seconds: int = 30
     
     ollama_timeout_seconds: int = 60

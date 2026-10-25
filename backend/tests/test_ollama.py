@@ -1,5 +1,6 @@
 import pytest
 import json
+import logging
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
 from app.ollama import classify_text, OllamaError
@@ -305,3 +306,248 @@ class TestClassifyText:
             # Frontend calculates: (1 - 0.10) * 100 = 90%
             confidence = (1 - result.uncertainty) * 100
             assert abs(confidence - 90.0) < 0.001
+
+    @pytest.mark.asyncio
+    async def test_request_includes_think_false(self):
+        """Verify that the Ollama request includes think: false to disable thinking mode."""
+        mock_response = {
+            "response": json.dumps({
+                "category": "Test",
+                "suggested_filename": "test",
+                "suggested_folder": "test",
+                "explanation": "test",
+                "uncertainty": 0.1
+            })
+        }
+        
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: mock_response
+            )
+            
+            await classify_text("test content")
+            
+            # Verify the request was called with think: false
+            assert mock_post.called
+            call_args = mock_post.call_args
+            payload = call_args[1]["json"]  # kwargs['json']
+            assert "think" in payload
+            assert payload["think"] is False
+
+    @pytest.mark.asyncio
+    async def test_long_input_text_truncated(self):
+        """Test that input text longer than max_analysis_text_chars is truncated before sending to Ollama."""
+        long_text = "x" * 15000  # Exceeds default max_analysis_text_chars (8000)
+        mock_response = {
+            "response": json.dumps({
+                "category": "Test",
+                "suggested_filename": "test",
+                "suggested_folder": "test",
+                "explanation": "test",
+                "uncertainty": 0.1
+            })
+        }
+        
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: mock_response
+            )
+            
+            await classify_text(long_text)
+            
+            # Verify the request was called with truncated text in prompt
+            assert mock_post.called
+            call_args = mock_post.call_args
+            payload = call_args[1]["json"]
+            prompt = payload["prompt"]
+            # The prompt should contain truncated text (max ~8000 chars + prompt template ~1500)
+            assert len(prompt) < len(long_text) + 2000  # significantly shorter than original
+            # The truncated text (8000 'x' chars) should appear in the prompt after the template
+            assert "x" * 8000 in prompt
+
+    @pytest.mark.asyncio
+    async def test_timing_logged_on_success(self, caplog):
+        """Test that timing is logged on successful classification."""
+        mock_response = {
+            "response": json.dumps({
+                "category": "Test",
+                "suggested_filename": "test-file",
+                "suggested_folder": "test-folder",
+                "explanation": "test explanation",
+                "uncertainty": 0.1
+            })
+        }
+        
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: mock_response
+            )
+            
+            with caplog.at_level(logging.INFO):
+                await classify_text("test content")
+            
+            # Check that timing info was logged
+            info_logs = [r for r in caplog.records if r.levelno >= logging.INFO]
+            assert any("success" in r.message and "total_ms" in r.message for r in info_logs)
+    
+    @pytest.mark.asyncio
+    async def test_timing_logged_on_timeout(self, caplog):
+        """Test that timing is logged on timeout."""
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = httpx.TimeoutException("Timeout")
+            
+            with caplog.at_level(logging.WARNING):
+                with pytest.raises(OllamaError):
+                    await classify_text("test content")
+            
+            # Check that timeout timing was logged
+            warning_logs = [r for r in caplog.records if r.levelno >= logging.WARNING]
+            assert any("timeout" in r.message.lower() and "duration_ms" in r.message for r in warning_logs)
+
+
+class TestOllamaSuggestionValidation:
+    """Tests for OllamaSuggestion filename/folder validation."""
+    
+    def test_valid_filename_and_folder(self):
+        suggestion = OllamaSuggestion(
+            category="Test",
+            suggested_filename="my-document",
+            suggested_folder="work-files",
+            explanation="Test explanation",
+            uncertainty=0.1
+        )
+        assert suggestion.suggested_filename == "my-document"
+        assert suggestion.suggested_folder == "work-files"
+    
+    def test_filename_with_underscore_and_dot(self):
+        suggestion = OllamaSuggestion(
+            category="Test",
+            suggested_filename="my_document_v2",
+            suggested_folder="work",
+            explanation="Test",
+            uncertainty=0.1
+        )
+        assert suggestion.suggested_filename == "my_document_v2"
+    
+    def test_filename_rejects_path_traversal(self):
+        with pytest.raises(ValueError, match="path traversal"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="../etc/passwd",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_absolute_path(self):
+        with pytest.raises(ValueError, match="path traversal"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="/absolute/path",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_invalid_chars(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename='file<name>',
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_colon(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="file:name",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_leading_trailing_whitespace(self):
+        with pytest.raises(ValueError, match="leading/trailing whitespace"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename=" filename",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_too_long(self):
+        with pytest.raises(ValueError, match="at most 200 characters"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="a" * 201,
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_reserved_names(self):
+        for reserved in ["CON", "PRN", "AUX", "NUL", "COM1", "LPT1"]:
+            with pytest.raises(ValueError, match="reserved system name"):
+                OllamaSuggestion(
+                    category="Test",
+                    suggested_filename=reserved,
+                    suggested_folder="test",
+                    explanation="Test",
+                    uncertainty=0.1
+                )
+    
+    def test_filename_rejects_reserved_with_extension(self):
+        with pytest.raises(ValueError, match="reserved system name"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="CON.txt",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_no_alphanumeric(self):
+        with pytest.raises(ValueError, match="must contain at least one alphanumeric"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="---",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_filename_rejects_invalid_chars_only_alphanumeric_hyphen_underscore_dot(self):
+        with pytest.raises(ValueError, match="only alphanumeric"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="file@name",
+                suggested_folder="test",
+                explanation="Test",
+                uncertainty=0.1
+            )
+    
+    def test_folder_same_validation_as_filename(self):
+        with pytest.raises(ValueError, match="path traversal"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="test",
+                suggested_folder="../outside",
+                explanation="Test",
+                uncertainty=0.1
+            )
+        
+        with pytest.raises(ValueError, match="at most 200 characters"):
+            OllamaSuggestion(
+                category="Test",
+                suggested_filename="test",
+                suggested_folder="a" * 201,
+                explanation="Test",
+                uncertainty=0.1
+            )

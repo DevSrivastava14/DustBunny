@@ -1,8 +1,13 @@
 import json
 import httpx
+import logging
+import time
 from typing import Optional
 from app.models import OllamaSuggestion
 from app.config import get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaError(Exception):
@@ -37,14 +42,23 @@ File content:
 
 async def classify_text(text: str) -> OllamaSuggestion:
     settings = get_settings()
+    total_start = time.perf_counter()
+    
+    # Truncate input text to safe analysis limit to prevent model context overflow
+    max_analysis_chars = settings.max_analysis_text_chars
+    if len(text) > max_analysis_chars:
+        logger.debug("classify_text: truncating input from %d to %d chars", len(text), max_analysis_chars)
+        text = text[:max_analysis_chars]
     
     prompt = OLLAMA_PROMPT.format(text=text)
+    logger.debug("classify_text: input_chars=%d, prompt_chars=%d", len(text), len(prompt))
     
     payload = {
         "model": settings.ollama_model,
         "prompt": prompt,
         "stream": False,
         "format": "json",
+        "think": False,
         "options": {
             "temperature": 0.1,
             "top_p": 0.9,
@@ -55,8 +69,10 @@ async def classify_text(text: str) -> OllamaSuggestion:
     
     async with httpx.AsyncClient(timeout=settings.ollama_timeout_seconds) as client:
         for attempt in range(settings.ollama_max_retries + 1):
+            attempt_start = time.perf_counter()
             try:
                 response = await client.post(url, json=payload)
+                request_ms = (time.perf_counter() - attempt_start) * 1000
                 
                 if response.status_code == 404:
                     raise OllamaError(
@@ -75,6 +91,9 @@ async def classify_text(text: str) -> OllamaSuggestion:
                 data = response.json()
                 response_text = data.get("response", "").strip()
                 
+                logger.debug("classify_text: attempt=%d duration_ms=%.0f response_chars=%d done=%s", 
+                    attempt + 1, request_ms, len(response_text), data.get("done"))
+                
                 if not response_text:
                     raise OllamaError(
                         "Empty response from Ollama",
@@ -83,7 +102,8 @@ async def classify_text(text: str) -> OllamaSuggestion:
                 
                 try:
                     parsed = json.loads(response_text)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    logger.warning("classify_text: invalid_json: %s, response_prefix=%s", e, response_text[:200])
                     raise OllamaError(
                         "Invalid JSON from Ollama",
                         user_message="AI service returned an invalid response format. Please try again."
@@ -91,14 +111,20 @@ async def classify_text(text: str) -> OllamaSuggestion:
                 
                 try:
                     suggestion = OllamaSuggestion(**parsed)
+                    total_ms = (time.perf_counter() - total_start) * 1000
+                    logger.info("classify_text: success category=%s total_ms=%.0f attempts=%d", 
+                        suggestion.category, total_ms, attempt + 1)
                     return suggestion
-                except Exception:
+                except Exception as e:
+                    logger.warning("classify_text: validation_failed: %s, parsed_keys=%s", e, list(parsed.keys()) if isinstance(parsed, dict) else "non-dict")
                     raise OllamaError(
                         "Invalid suggestion format from Ollama",
                         user_message="AI service returned an incomplete suggestion. Please try again."
                     )
             
             except httpx.TimeoutException:
+                request_ms = (time.perf_counter() - attempt_start) * 1000
+                logger.warning("classify_text: timeout attempt=%d duration_ms=%.0f", attempt + 1, request_ms)
                 if attempt < settings.ollama_max_retries:
                     continue
                 raise OllamaError(
@@ -116,6 +142,8 @@ async def classify_text(text: str) -> OllamaSuggestion:
                 raise
             
             except Exception as e:
+                request_ms = (time.perf_counter() - attempt_start) * 1000
+                logger.warning("classify_text: unexpected_error attempt=%d duration_ms=%.0f error=%s", attempt + 1, request_ms, e)
                 if attempt < settings.ollama_max_retries:
                     continue
                 raise OllamaError(
@@ -123,6 +151,8 @@ async def classify_text(text: str) -> OllamaSuggestion:
                     user_message="An unexpected error occurred while contacting the AI service. Please try again."
                 )
     
+    total_ms = (time.perf_counter() - total_start) * 1000
+    logger.error("classify_text: max_retries_exceeded total_ms=%.0f", total_ms)
     raise OllamaError(
         "Max retries exceeded",
         user_message="AI service did not respond after multiple attempts. Please try again later."
